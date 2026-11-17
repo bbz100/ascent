@@ -1,0 +1,64 @@
+<section class="card interview">
+    <h2>Check your dates</h2>
+    <p>Edit any date below. Select the submission dates that apply to you, or leave them unselected if you are unsure. Your saved choices will be used in your plan.</p>
+    <fieldset class="question-fields" disabled="@Busy">
+        @foreach (var date in Dates)
+        {
+            <div class="requirement" @key="date.Id">
+                <strong>@date.Label</strong>
+                <label class="date-answer">Date<input type="date" aria-label="@($"{date.Label} date")" @bind="date.Date" @bind:after="Changed" /></label>
+                <label class="single-field">Time (optional)<input type="time" aria-label="@($"{date.Label} time")" value="@date.Time" @onchange="async e=>{ date.Time=e.Value?.ToString(); await Changed(); }" /></label>
+                @if (date.Submission)
+                {
+                    <label class="choice"><input type="checkbox" @bind="date.UseForPlan" @bind:after="Changed" />Use this date in my plan</label>
+                }
+                <DocumentSource Sources="@(new List<Evidence> { date.Source })" Document="@Expedition.DocumentText" FileName="@Expedition.FileName" />
+            </div>
+        }
+        @if (Dates.Count == 0)
+        {
+            <p>No dates were found. Your route can remain undated.</p>
+        }
+        @if (Expedition.Analysis!.InterviewWarning is not null)
+        {
+            <label class="choice"><input type="checkbox" @bind="TasksReviewed" @bind:after="Changed" />I have reviewed the tasks above and want to plan them.</label>
+        }
+        <div class="button-row"><button type="button" class="primary" @onclick="Save">Save dates</button></div>
+        @if (Dirty) { <small>Save your date changes before generating a route.</small> }
+        else if (Expedition.DatesReviewed) { <small>Your dates are saved. You can edit them again before generating a route.</small> }
+    </fieldset>
+</section>
+@code {
+    [Parameter, EditorRequired] public Expedition Expedition { get; set; } = default!;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool Dirty { get; set; }
+    [Parameter] public EventCallback<bool> OnDirtyChanged { get; set; }
+    [Parameter] public EventCallback<DateReviewSubmission> OnSave { get; set; }
+    Guid? LoadedId;
+    bool TasksReviewed;
+    List<DateDraft> Dates = [];
+    protected override void OnParametersSet()
+    {
+        if (LoadedId == Expedition.Id) return;
+        LoadedId = Expedition.Id;
+        TasksReviewed = Expedition.TasksReviewed;
+        Dates = Expedition.Analysis!.Deadlines.Select(d => {
+            var saved = Expedition.DateReviews.SingleOrDefault(r => r.DeadlineId == d.Id);
+            return new DateDraft { Id=d.Id, Label=d.Label, Source=d.Source, Submission=d.Purpose=="submission",
+                Date=saved is not null ? saved.Date : d.DatePrecision=="day" ? d.Date : null, Time=saved is not null ? saved.Time : d.Time,
+                UseForPlan=saved?.UseForPlan ?? false };
+        }).ToList();
+    }
+    Task Changed() => OnDirtyChanged.InvokeAsync(true);
+    Task Save() => OnSave.InvokeAsync(new(Dates.Select(d => new DeadlineReview(d.Id,d.Date,d.Time,d.UseForPlan)).ToList(),TasksReviewed));
+    sealed class DateDraft
+    {
+        public string Id { get; init; } = "";
+        public string Label { get; init; } = "";
+        public Evidence Source { get; init; } = new();
+        public bool Submission { get; init; }
+        public DateOnly? Date { get; set; }
+        public string? Time { get; set; }
+        public bool UseForPlan { get; set; }
+    }
+}

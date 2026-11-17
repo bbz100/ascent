@@ -1,0 +1,296 @@
+@page "/"
+@page "/planner"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject StudyPlanningService Planning
+@inject IExpeditionStore Store
+@inject DocumentReader Reader
+@inject DocumentArchive Archive
+@inject ILogger<Planner> Logger
+@inject IJSRuntime JS
+
+<PageTitle>Ascent · Plan your expedition</PageTitle>
+<div class="planner-shell">
+    <aside class="sidebar">
+        <a class="brand" href="/"><img src="@Assets["ascent-mark.svg"]" alt="" />Ascent<span>.</span></a>
+        <p class="eyebrow">YOUR SPACE</p>
+        <button class="nav active" disabled="@Busy" @onclick="New">＋ New expedition</button>
+        <p class="eyebrow">SAVED EXPEDITIONS</p>
+        <div class="saved-projects">
+        @foreach (var group in SavedBriefGroups.Build(Saved))
+        {
+            <div class="saved-project-row">
+            <button class="nav saved-brief" disabled="@Busy" @onclick="()=>OpenGroup(group)">
+                <span>@group.Latest.Title</span>
+                <small class="expedition-status">@group.Latest.Status</small>
+                @if(group.Latest.HasApprovedRoute && group.Latest.RequiredTotal>0)
+                {
+                    <small>@group.Latest.RequiredCompleted/@group.Latest.RequiredTotal required checkpoints complete</small>
+                    <span class="saved-progress" role="progressbar" aria-label="Required checkpoint progress" aria-valuemin="0" aria-valuemax="@group.Latest.RequiredTotal" aria-valuenow="@group.Latest.RequiredCompleted"><span style="width:@(group.Latest.ProgressPercent)%"></span></span>
+                }
+                @if(group.Latest.OptionalTotal>0){<small>@group.Latest.OptionalCompleted/@group.Latest.OptionalTotal optional complete</small>}
+                @if(group.Projects.Count>1){<small>@group.Projects.Count saved projects · Choose one →</small>}
+            </button>
+            <button class="delete-expedition" disabled="@Busy" aria-label="@($"Delete expedition {group.Latest.Title}")" title="Delete expedition" @onclick="()=>RequestDelete(group.Latest)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 10v7m4-7v7" /></svg></button>
+            </div>
+        }
+        </div>
+        <div class="encouragement"><span>☀</span><strong>A little progress counts.</strong><p>Your mountain. Your pace.<br />One step at a time.</p></div>
+        <small class="local-label">Private browser workspace · Temporary demo</small>
+    </aside>
+    <main class="planner-main">
+        <header class="topbar"><span>Mountain range <b>/</b> Plan your expedition</span></header>
+        <div class="planner-body">
+            <p class="eyebrow">YOUR NEXT CHAPTER STARTS HERE</p>
+            <h1>@(Current?.Title ?? "Big ambitions. Small steps.")</h1>
+            <p class="subtitle">A brief, a few useful questions, and a route that feels achievable.</p>
+            @if(Current?.OriginalDocumentFile is not null)
+            {<a class="original-document" href="@($"/documents/{Current.Id}/original")" download><span class="document-file-icon @(Path.GetExtension(Current.FileName).Equals(".pdf",StringComparison.OrdinalIgnoreCase)?"pdf-file":"")" aria-hidden="true">@Path.GetExtension(Current.FileName).TrimStart('.').ToUpperInvariant()</span><span>@Current.FileName<small>Download original document</small></span><span aria-hidden="true">↓</span></a>}
+            <nav class="steps" aria-label="Planning stages">
+                <span class="@(Current is null ? "current" : "finished")">01 <b>Your brief</b></span>
+                <span class="@(Current is not null && Current.Routes.Count == 0 ? "current" : "")">02 <b>Fill the gaps</b></span>
+                <span class="@(Current?.Routes.Count > 0 ? "current" : "")">03 <b>Choose your climb</b></span>
+            </nav>
+            @if (Error is not null)
+            { <div class="error" role="alert">@Error</div> }
+            @if (Busy)
+            {
+                <div class="working" role="status"><span class="spinner"></span><div><strong>@BusyText</strong><p>Your work is processed on the server. You can cancel this request.</p></div><button class="subtle" @onclick="Cancel">Cancel</button></div>
+            }
+            @if (Current is null)
+            {
+                @if(Duplicates.Count>0)
+                {
+                    <section class="card duplicate-prompt" aria-label="This document has saved projects" role="region">
+                        <span class="step-icon">▤</span><p class="eyebrow">YOU’VE BEEN HERE BEFORE</p>
+                        <h2>This brief already has a project.</h2>
+                        <p>Would you like to open your project or delete it and start over?</p>
+                        <div class="matching-projects">
+                        @foreach(var match in Duplicates)
+                        {
+                            <article class="matching-project"><div><h3>@match.Title</h3><p>@match.Status</p><small>@match.FileName · Created @match.CreatedUtc.ToLocalTime().ToString("dd MMM yyyy, HH:mm")</small></div><button class="primary" disabled="@Busy" @onclick="()=>Open(match.Id)">Open project →</button></article>
+                        }
+                        </div>
+                        <div class="button-row"><button class="secondary" disabled="@(Busy)" @onclick="()=>Analyse(true)">Delete old project and start over</button><button class="subtle" disabled="@Busy" @onclick="New">Choose another document</button></div>
+                        <small class="answer-help">Starting over permanently deletes saved projects for this brief, including their answers, routes and progress.</small>
+                    </section>
+                }
+                <div class="upload-grid" hidden="@(Duplicates.Count>0)">
+                    <section class="card upload-card">
+                        <span class="step-icon">↥</span><h2>Bring your brief.</h2>
+                        <p>Upload a module outline or assessment brief. We’ll find the requirements and ask about the details that are missing.</p>
+                        <label class="dropzone"><span>＋ Choose a document</span><small>Word, PDF, RTF, OpenDocument, text, Excel or PowerPoint · up to 10 MB</small><InputFile OnChange="FileSelected" accept="@DocumentReader.Accept" disabled="@Busy" /></label>
+                        @if (!string.IsNullOrEmpty(FileName)) { <p class="file-name">▤ @FileName · @Document.Length.ToString("N0") characters</p> }
+                        <details><summary>Or paste the brief</summary><textarea aria-label="Paste your assessment brief" @bind="Document" @bind:after="ClearOriginalDocument" disabled="@Busy" placeholder="Paste the complete assessment instructions here…" rows="10" maxlength="60000"></textarea></details>
+                        <button class="primary" disabled="@(Busy || string.IsNullOrWhiteSpace(Document))" @onclick="()=>Analyse()">Find my starting point <span>→</span></button>
+                    </section>
+                    <aside class="card guide"><div class="mini-mountain">◭</div><p class="eyebrow">A PLAN, NOT ANOTHER TASK LIST</p><h2>You don’t need all the answers.</h2><p>We’ll use what your brief tells us, then ask a few focused questions.</p><ol><li>Keep confirmed requirements grounded in your document.</li><li>Choose “I don’t know yet” whenever you need to.</li><li>Compare three routes covering the same work.</li></ol><div class="soft-note">Workshop titles or dates missing? They can stay as placeholders.</div></aside>
+                </div>
+            }
+            else
+            {
+                <details class="card facts" open="@Busy"><summary>What we found · @Current.Analysis!.Requirements.Count requirements</summary><p>@Current.Analysis.Summary</p>
+                    @foreach (var req in Current.Analysis.Requirements)
+                    { <div class="requirement"><strong>@req.Title</strong><span>@req.Kind · @(req.Mandatory ? "Required" : "Supporting / optional") @(req.Count > 1 ? $"· {req.Count} occurrences" : "")</span><DocumentSource Sources="@(new List<Evidence> { req.Source })" Document="@Current.DocumentText" FileName="@Current.FileName" /></div> }
+                    @foreach (var deadline in Current.Analysis.Deadlines)
+                    { <div class="requirement"><strong>@deadline.Label</strong><span>@(deadline.Date?.ToString("dd MMM yyyy") ?? "Date to confirm") @deadline.Time</span><DocumentSource Sources="@(new List<Evidence> { deadline.Source })" Document="@Current.DocumentText" FileName="@Current.FileName" /></div> }
+                </details>
+                @foreach (var warning in Current.Analysis!.Warnings)
+                { <div class="warning">ⓘ @warning</div> }
+                @if (Current.Routes.Count == 0)
+                {
+                    @if (Current.Analysis.InterviewWarning is not null)
+                    { <div class="warning">@Current.Analysis.InterviewWarning</div> }
+                    @if(Busy)
+                    {
+                        <section class="card interview"><h2>@(TaskFactsReady ? "Your tasks are ready" : "Your tasks are appearing above")</h2><p>@BusyText</p>
+                        @if(TaskFactsReady){<button class="secondary" @onclick="SkipOptionalDetails">Continue with these tasks</button>}
+                        </section>
+                    }
+                    else
+                    {
+                    <DateReviewForm @key="Current.Id" Expedition="Current" Busy="Busy" Dirty="DatesDirty" OnDirtyChanged="dirty=>DatesDirty=dirty" OnSave="SaveDates" />
+                    var question = QuestionFlow.Pending(Current).FirstOrDefault();
+                    @if (question is not null)
+                    {
+                        <section class="card interview" @key="question.Id"><p class="eyebrow">LET’S MAKE THIS YOURS · QUESTION @(Current.Answers.Count + 1) OF @Current.Questions.Count</p><h2>@question.Question</h2><p>@question.Why</p><DocumentSource Sources="@(new List<Evidence> { question.Source })" Document="@Current.DocumentText" FileName="@Current.FileName" /><QuestionForm Question="question" Busy="Busy" OnSubmit="submission=>SubmitAnswer(question.Id,submission)" /></section>
+                    }
+                    else
+                    {
+                        <section class="card interview"><p class="eyebrow">READY FOR THE NEXT STEP</p><h2>Enough to start climbing.</h2><p>Your answers are saved. Unknown details will remain visible as placeholders, with no invented dates.</p><div class="button-row"><button class="primary" disabled="@(Busy || DatesDirty || (Current.Analysis.InterviewWarning is not null && !Current.DatesReviewed))" @onclick="Generate">Generate my three routes →</button></div>@if(FollowUpChecked){<p>No more follow-up checks needed for this interview.</p>}</section>
+                    }
+                    }
+                    @if (Current.Answers.Count > 0)
+                    { <details class="card"><summary>Your saved answers · @Current.Answers.Count</summary>@foreach (var a in Current.Answers){<div class="requirement"><strong>@Current.Questions.Single(q => q.Id == a.QuestionId).Question</strong><p>@a.Text</p></div>}</details> }
+                }
+                else if (Current.ApprovedRouteId is null)
+                {
+                    <p class="subtitle">The same requirements. Three ways to pace your climb. Effort is indicative; groupings may be similar where tasks cannot safely combine.</p>
+                    <div class="route-options">@foreach (var route in Current.Routes)
+                    { <section class="card route-option"><p class="eyebrow">@(route.Name == "Scenic Route" ? "SMALL STEPS" : route.Name == "Steady Climb" ? "A BALANCED PACE" : "LONGER SESSIONS")</p><span class="route-symbol">@(route.Name == "Scenic Route" ? "♧" : route.Name == "Steady Climb" ? "↗" : "△")</span><h2>@route.Name</h2><p>@route.Description</p><strong>@route.Milestones.Count checkpoints</strong><p>@Effort(route)</p><details><summary>Preview checkpoints</summary><ol>@foreach(var m in route.Milestones){<li>@m.Title @(m.Optional ? "(optional)" : "")</li>}</ol></details><button class="primary" disabled="@Busy" @onclick="() => Approve(route.Id)">Choose and approve →</button></section> }</div>
+                }
+                else
+                {
+                    var route = Current.Routes.Single(r => r.Id == Current.ApprovedRouteId);
+                    <div class="approved-heading"><h2>@route.Name</h2><span>@route.Milestones.Count(m => m.Complete) / @route.Milestones.Count complete</span><button class="secondary" @onclick="() => ListView = !ListView">@(ListView ? "Show mountain" : "Show task list")</button></div>
+                    <div class="expedition-grid"><section>
+                    @if (ListView)
+                    { <div class="card task-list">@foreach(var m in route.Milestones){<button @onclick="() => Select(m)"><span>@(m.Complete ? "✓" : RouteBuilder.Available(m,route) ? "◇" : "⌑") @(m.Complete || RouteBuilder.Available(m,route) ? m.Title : "A later checkpoint")</span><small>@(m.Optional ? "Optional" : "Required")</small></button>}</div> }
+                    else { <PlanningRoute Route="route" OnSelect="Select" OnShowList="()=>ListView=true" CelebrateCompletion="CelebrationPending" OnCelebrationShown="()=>CelebrationPending=false" /> }
+                    </section><aside class="card checkpoint" @ref="CheckpointPanel" tabindex="-1" aria-label="Selected checkpoint details">
+                    @if (Selected is not null)
+                    {
+                        var m = route.Milestones.SingleOrDefault(x => x.Id == Selected);
+                        if(m is not null)
+                        {
+                            <p class="eyebrow">YOUR CHECKPOINT</p><h2>@(m.Complete || RouteBuilder.Available(m,route) ? m.Title : "A later checkpoint")</h2>
+                            @if (m.Complete || RouteBuilder.Available(m, route))
+                            {
+                                <CheckpointWork Items="@m.WorkItemIds.Select(id=>Current.WorkItems.Single(w=>w.Id==id)).ToList()" Requirements="Current.Analysis.Requirements" Deadlines="Current.Analysis.Deadlines" DateReviews="Current.DateReviews" Document="@Current.DocumentText" FileName="@Current.FileName" />
+                                <label for="notes">Personal notes (optional)</label><textarea id="notes" @bind="Notes" rows="3" disabled="@(Busy || m.Complete)" maxlength="4000"></textarea>
+                                <button class="primary" disabled="@(Busy || m.Complete)" @onclick="() => Complete(m.Id)">@(m.Complete ? "✓ Completed" : "Mark as complete ✓")</button>
+                            }
+                            else { <p>This step unlocks after its prerequisites. Focus on your available checkpoints for now.</p> }
+                        }
+                    }
+                    else { <p class="eyebrow">ONE STEP AT A TIME</p><h2>Choose a checkpoint.</h2><p>Independent tasks are available together. Complete prerequisites to reveal the next stretch.</p> }
+                    </aside></div>
+                }
+            }
+        </div>
+        <footer>ASCENT / ONE STEP AT A TIME <span>ASP.NET Core · Blazor · SQL Server</span></footer>
+    </main>
+</div>
+@if(DeleteCandidate is not null)
+{
+    <dialog class="delete-confirmation" @ref="DeleteDialog" aria-labelledby="delete-expedition-title" aria-describedby="delete-expedition-description" @onclose="DismissDelete" @oncancel:preventDefault="Busy">
+        <h2 id="delete-expedition-title">Delete “@DeleteCandidate.Title”?</h2>
+        <p id="delete-expedition-description">This permanently deletes this expedition’s answers, routes, notes and progress. This cannot be undone.</p>
+        <p class="archive-kept">The original document stays in the private beta-testing archive.</p>
+        @if(Error is not null){<p role="alert" class="error">@Error</p>}
+        <div class="button-row"><button class="secondary" data-cancel-delete disabled="@Busy" @onclick="CloseDelete">Cancel</button><button class="danger-button" disabled="@Busy" @onclick="ConfirmDelete">@(Busy?"Deleting…":"Delete expedition")</button></div>
+    </dialog>
+}
+
+@code {
+    Expedition? Current;
+    List<ExpeditionSummary> Saved = [];
+    List<DocumentMatch> Duplicates = [];
+    string Document = "", FileName = "", Notes = "";
+    string? OriginalDocumentFile;
+    void ClearOriginalDocument(){OriginalDocumentFile=null;FileName="";}
+    string? Error, Selected;
+    bool Busy, FollowUpChecked, ListView;
+    bool CelebrationPending;
+    bool RevealSelectedCheckpoint;
+    ElementReference CheckpointPanel;
+    ExpeditionSummary? DeleteCandidate;
+    ElementReference DeleteDialog;
+    bool ShowDeleteDialog;
+    void RequestDelete(ExpeditionSummary project){DeleteCandidate=project;Error=null;ShowDeleteDialog=true;}
+    void DismissDelete(){DeleteCandidate=null;}
+    async Task CloseDelete(){await JS.InvokeVoidAsync("ascentRouteMap.closeDeleteDialog",DeleteDialog);DeleteCandidate=null;}
+    async Task ConfirmDelete()
+    {
+        if(DeleteCandidate is null || Busy)return;
+        var id=DeleteCandidate.Id;
+        await Run("Deleting your expedition…",async ct=>{
+            await Store.DeleteAsync(id,ct);
+            if(Current?.Id==id)New();
+            Duplicates=Duplicates.Where(d=>d.Id!=id).ToList();
+        });
+        if(!Saved.Any(s=>s.Id==id))await CloseDelete();
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if(ShowDeleteDialog){ShowDeleteDialog=false;await JS.InvokeVoidAsync("ascentRouteMap.openDeleteDialog",DeleteDialog);}
+        if(!RevealSelectedCheckpoint)return;
+        RevealSelectedCheckpoint=false;
+        try {await JS.InvokeVoidAsync("ascentRouteMap.revealCheckpoint",CheckpointPanel);}
+        catch(JSException) { }
+    }
+    bool TaskFactsReady,SkipDetails,HasTaskPreview;
+    void SkipOptionalDetails(){SkipDetails=true;Request?.Cancel();}
+    bool DatesDirty;
+    string BusyText = "";
+    CancellationTokenSource? Request;
+    protected override async Task OnInitializedAsync()
+    {
+        try { Saved = await Store.ListAsync(); }
+        catch (Exception ex) { Logger.LogWarning("Database unavailable: {Type}", ex.GetType().Name); Error = "SQL Server isn't ready. Run the database initialization command in the README, then refresh this page."; }
+    }
+    async Task Run(string status, Func<CancellationToken,Task> action)
+    {
+        if(Busy) return;
+        Busy = true; Error = null; BusyText = status; Request = new();
+        try { await action(Request.Token); Saved = await Store.ListAsync(Request.Token); }
+        catch(OperationCanceledException) { Error = SkipDetails ? null : "Request cancelled. Any answers already saved are still available."; }
+        catch(DuplicateDocumentException ex) { Duplicates=ex.Matches; }
+        catch(PlanningException ex) { Error = ex.Message; }
+        catch(Exception ex) { Logger.LogError("Planning operation failed: {Type}", ex.GetType().Name); Error = "The operation couldn't be saved. Check the database and server configuration, then reopen the expedition before retrying."; }
+        finally { Request.Dispose(); Request = null; Busy = false; }
+    }
+    async Task FileSelected(InputFileChangeEventArgs args)
+    {
+        Error = null; Duplicates=[];OriginalDocumentFile=null;
+        try
+        {
+            await using var stream = args.File.OpenReadStream(DocumentReader.MaxBytes);
+            await using var archived=await Archive.StoreAsync(args.File.Name,stream);
+            Document = await Reader.ReadAsync(args.File.Name,archived.Content); FileName = Path.GetFileName(args.File.Name);OriginalDocumentFile=archived.StoredFile;
+            Duplicates = await Store.FindByDocumentAsync(Document);
+        }
+        catch(Exception ex) { Document="";FileName="";OriginalDocumentFile=null;Logger.LogWarning("Document upload failed: {Type}",ex.GetType().Name);Error=ex is PlanningException?ex.Message:"The document could not be archived or read. Check the upload folder permissions and document extractor installation."; }
+    }
+    async Task Analyse(bool startNew=false) { TaskFactsReady=false;SkipDetails=false;HasTaskPreview=false; await Run("Extracting your brief and identifying missing details…", async ct =>
+    {
+        if(Document.Length > DocumentReader.MaxCharacters) throw new PlanningException("The text exceeds 60,000 characters.");
+        DatesDirty=false; Current = await Planning.StartAsync(string.IsNullOrWhiteSpace(FileName) ? "Pasted brief" : FileName, Document,ct,startNew,OriginalDocumentFile,async (preview,complete)=>{
+            Current=preview;TaskFactsReady=complete;HasTaskPreview=true;
+            BusyText=complete?"Your tasks are ready. Preparing optional dates and questions...":"Finding your tasks...";
+            await InvokeAsync(StateHasChanged);
+        }); Duplicates=[];
+    }); if(HasTaskPreview&&!TaskFactsReady)Current=null; if(Current is not null) await TailorCurrent(); }
+    async Task SubmitAnswer(string id,QuestionSubmission submission)
+    {
+        await Run("Saving your answer…",async ct=>Current=await Planning.AnswerAsync(Current!.Id,id,submission.Text,submission.Unknown,ct,submission.Data));
+        await TailorCurrent();
+    }
+    Task FollowUp() => Run("Checking whether a follow-up would improve your plan…", async ct => { Current = await Planning.FollowUpAsync(Current!.Id,ct); FollowUpChecked=true; });
+    Task SaveDates(DateReviewSubmission submission) => Run("Saving your dates…", async ct => {
+        Current = await Planning.SaveDatesAsync(Current!.Id,submission,ct);
+        DatesDirty = false;
+    });
+    Task Generate() => Run("Building and validating your milestone routes…",async ct => Current = await Planning.GenerateAsync(Current!.Id,ct));
+    Task Approve(string id) => Run("Saving your chosen route…",async ct => Current = await Planning.ApproveAsync(Current!.Id,id,ct));
+    Task Complete(string id) => Run("Recording your progress…",async ct => {
+        var wasComplete=RouteCompletion.IsComplete(Current!.Routes.Single(r=>r.Id==Current.ApprovedRouteId));
+        Current=await Planning.CompleteAsync(Current.Id,id,Notes,ct);
+        if(!wasComplete && RouteCompletion.IsComplete(Current.Routes.Single(r=>r.Id==Current.ApprovedRouteId))) {CelebrationPending=true;ListView=false;}
+    });
+    Task Open(Guid id) => Run("Opening your expedition…",async ct => { Current = await Store.GetAsync(id,ct); DatesDirty=false; Duplicates=[]; Selected=null; FollowUpChecked=false; });
+    Task OpenGroup(SavedBriefGroup group)
+    {
+        if(group.Projects.Count==1)return Open(group.Latest.Id);
+        return Run("Finding your saved projects…",async ct=>
+        {
+            var latest=await Store.GetAsync(group.Latest.Id,ct);
+            Duplicates=await Store.FindByDocumentAsync(latest.DocumentText,ct);
+            Current=null;Document=latest.DocumentText;FileName=latest.FileName;OriginalDocumentFile=latest.OriginalDocumentFile;Selected=null;
+        });
+    }
+    void Select(Milestone m) { Selected=m.Id; Notes=m.Notes; RevealSelectedCheckpoint=true; }
+    void New() { DatesDirty=false; Duplicates=[]; Current=null; Error=null; Document=""; FileName="";OriginalDocumentFile=null;FollowUpChecked=false;Selected=null; }
+    Task TailorCurrent() => Task.CompletedTask;
+    void Cancel() => Request?.Cancel();
+    public void Dispose() { Request?.Cancel(); }
+    string Effort(StudyRoute route)
+    {
+        var items = Current!.WorkItems;
+        var minutes = items.Sum(w=>w.EstimatedMinutes ?? 0);
+        return minutes == 0 ? "Effort to be confirmed" : $"About {minutes / 60.0:0.#} hours" + (items.Any(w=>w.EstimatedMinutes is null) ? " + unestimated tasks" : " in total");
+    }
+}
+
+
+

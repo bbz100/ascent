@@ -1,0 +1,33 @@
+@if (Chunks.Count > 0)
+{
+    <details class="checkpoint-sources">
+        <summary>From your brief</summary>
+        @foreach (var chunk in Chunks)
+        {
+            <blockquote>@chunk.Text <small>— @chunk.Id@(string.IsNullOrEmpty(FileName) ? "" : $" in {FileName}")</small></blockquote>
+        }
+    </details>
+}
+else if (Unavailable)
+{
+    <small>The original source location is unavailable for this saved item.</small>
+}
+@code {
+    [Parameter] public List<Evidence> Sources { get; set; } = [];
+    [Parameter, EditorRequired] public string Document { get; set; } = "";
+    [Parameter] public string FileName { get; set; } = "";
+    List<Paragraph> Chunks = [];
+    bool Unavailable;
+
+    protected override void OnParametersSet()
+    {
+        Chunks = [];
+        Unavailable = false;
+        foreach (var source in Sources)
+        {
+            try { Chunks.AddRange(SourceReferences.Chunks(source, Document)); }
+            catch (PlanningException) { Unavailable = true; }
+        }
+        Chunks = Chunks.DistinctBy(p => p.Id).ToList();
+    }
+}

@@ -1,0 +1,167 @@
+@inject IJSRuntime JS
+<section class="fixed-route-map" aria-label="Your mountain route">
+    @if(SummitReached)
+    {
+        <div class="summit-success" role="status"><span aria-hidden="true">✦</span><div><strong>Summit reached!</strong><p>You completed every required checkpoint. Take a moment to enjoy the view.</p></div><button class="subtle" @onclick="Celebrate">Celebrate again ✨</button></div>
+    }
+    @if(ShowCelebration)
+    {
+        <div class="summit-celebration" @key="CelebrationRun">
+            <div class="summit-confetti" aria-hidden="true">@for(var i=0;i<28;i++){<i style="@ConfettiStyle(i)"></i>}</div>
+            <div class="summit-celebration-card" role="status"><span class="summit-trophy" aria-hidden="true">🏆</span><h2>You reached your summit!</h2><p>Every step brought you here.<br />Look how far you’ve come.</p><button class="primary" @onclick="()=>ShowCelebration=false">Enjoy the view →</button></div>
+        </div>
+    }
+    <header class="fixed-map-heading"><span class="eyebrow">YOUR MOUNTAIN · YOUR PACE</span><p>One achievable step at a time.</p></header>
+    <div class="fixed-map-viewport" @ref="Viewport" tabindex="0" aria-label="Scrollable mountain route, starting at the bottom">
+        <div class="fixed-map-canvas" style="height:@(Geometry.Height)px">
+            <svg class="continuous-landscape" viewBox="0 0 700 @Geometry.Height" preserveAspectRatio="none" aria-hidden="true">
+                <defs><linearGradient id="continuous-ground" x2="0" y2="1"><stop stop-color="#7da4a7"/><stop offset="1" stop-color="#a9c6c6"/></linearGradient></defs>
+                <rect x="0" y="0" width="700" height="@Geometry.Height" fill="#deeeec" />
+                <circle cx="350" cy="220" r="67" fill="#fff1c9" opacity=".45" />
+                <path d="@($"M-80 1080 L70 660 L190 555 L350 220 L492 438 L585 640 L780 1080 V{Geometry.Height+60} H-80Z")" fill="url(#continuous-ground)" />
+                <path d="M350 220 L272 375 L323 339 L350 378 L381 306 L429 342Z" fill="#f7faef" />
+                <path d="M350 220 L350 301 L381 306 L429 342Z" fill="#d5e5df" />
+                <path d="M350 220 V171" stroke="#a37a50" stroke-width="3" />
+                <path class="landscape-flag" d="M352 173 C371 163 381 191 409 174 C396 209 373 183 352 194Z" fill="#d3935d" />
+                @foreach(var ridge in Ridges)
+                {<path d="@ridge.Path" fill="@ridge.Color" opacity=".68" />}
+                @foreach(var tree in Trees)
+                {
+                    <g transform="@($"translate({tree.X} {tree.Y})")">
+                        <path d="M0 8 V48" stroke="#477976" stroke-width="3" />
+                        <path class="landscape-leaves" d="M0 0 L-12 25 H-6 L-18 44 H18 L6 25 H12Z" fill="#548c88" opacity=".65" />
+                    </g>
+                }
+                @foreach(var cloud in Clouds)
+                {
+                    <g transform="@($"translate({cloud.X} {cloud.Y})")"><g class="landscape-cloud"><path d="M0 45 C-8 25 12 12 29 24 C28-8 77-14 87 18 C108 5 133 17 132 34 C155 26 174 35 180 50 H0Z" fill="#f5faf2" opacity=".6" /></g></g>
+                }
+            </svg>
+            <div class="fixed-summit-label">⚑ Your summit</div>
+            <svg class="fixed-route-paths" viewBox="0 0 700 @Geometry.Height" preserveAspectRatio="none" aria-hidden="true">
+                <defs><clipPath id="@("route-reveal-"+Route.Id)"><rect x="0" y="@FogHeight" width="700" height="@(Geometry.Height-FogHeight)" /></clipPath></defs>
+                <g clip-path="@($"url(#route-reveal-{Route.Id})")">
+                @if(Roots.Count>1){<path d="@RootSpine()" class="scenic-trail" />}
+                @foreach(var point in Geometry.Checkpoints)
+                {
+                    var milestone=Route.Milestones.Single(m=>m.Id==point.Id);
+                    @if(milestone.DependsOn.Count==0)
+                    {<path d="@(Roots.Count>1?RootBranch(point):RootPath(point))" class="scenic-trail @(milestone.Complete?"completed-trail":"")" />}
+                    @foreach(var id in milestone.DependsOn)
+                    {
+                        var parent=Geometry.Checkpoints.Single(p=>p.Id==id);
+                        <path d="@Edge(parent,point)" class="scenic-trail @(milestone.Complete?"completed-trail":"")" />
+                    }
+                }
+                </g>
+            </svg>
+            @if(FogHeight>0){<div class="fixed-route-fog" style="top:@(Math.Max(0,FogHeight-70))px;height:160px" aria-hidden="true"></div>}
+            @foreach(var point in Geometry.Checkpoints.Where(p=>VisibleCheckpoints.Contains(p.Id)))
+            {
+                var milestone=Route.Milestones.Single(m=>m.Id==point.Id);
+                var ready=RouteBuilder.Available(milestone,Route);
+                <button class="fixed-checkpoint @(milestone.Complete?"completed-checkpoint":ready?milestone.Optional?"ready support-step":"ready":"locked")"
+                    @key="milestone.Id"
+                    data-milestone-id="@milestone.Id" data-map-x="@point.X" data-map-y="@point.Y"
+                    style="left:@(point.X)%;top:@(point.Y)px" @onclick="()=>OnSelect.InvokeAsync(milestone)"
+                    aria-label="@((milestone.Complete?"Completed: ":ready?"Available: ":"Locked: ")+milestone.Title)">
+                    <span class="checkpoint-symbol">@(milestone.Complete?"✓":ready?"◇":"⌑")</span><strong>@milestone.Title</strong>
+                </button>
+            }
+            <div class="fixed-base-label">Your starting point</div>
+        </div>
+    </div>
+    <footer class="fixed-map-footer"><div class="ascent-progress"><strong>Your ascent</strong><span>@Route.Milestones.Count(m=>m.Complete) / @Route.Milestones.Count checkpoints</span><div class="ascent-progress-track"><i style="width:@ProgressPercent%"></i></div></div><button @onclick="()=>OnShowList.InvokeAsync()">Task list →</button></footer>
+</section>
+@code {
+    [Parameter,EditorRequired] public StudyRoute Route {get;set;}=null!;
+    [Parameter] public EventCallback<Milestone> OnSelect {get;set;}
+    [Parameter] public EventCallback OnShowList {get;set;}
+    [Parameter] public bool CelebrateCompletion {get;set;}
+    [Parameter] public EventCallback OnCelebrationShown {get;set;}
+    RouteMapGeometry Geometry=new(1000,[]);
+    List<MapCheckpoint> Roots=[];
+    List<LandscapeRidge> Ridges=[];
+    List<LandscapePoint> Trees=[],Clouds=[];
+    int ProgressPercent=>Route.Milestones.Count==0?0:Route.Milestones.Count(m=>m.Complete)*100/Route.Milestones.Count;
+    int FogHeight;
+    HashSet<string> VisibleCheckpoints=[];
+    ElementReference Viewport;
+    string? PositionedRoute;
+    bool SummitReached,ShowCelebration;
+    string? ObservedRoute;
+    int CelebrationRun;
+    void Celebrate(){CelebrationRun++;ShowCelebration=true;}
+    static string ConfettiStyle(int i)
+    {
+        var angle=(-165+(i*67%151))*Math.PI/180;
+        var distance=130+i*43%140;
+        var x=Math.Cos(angle)*distance;
+        var y=Math.Sin(angle)*distance;
+        return FormattableString.Invariant($"--dx:{x:F1}px;--dy:{y:F1}px;--drift:{x*1.3+(i%2==0?24:-24):F1}px;--fall:{170+i*31%160}px;--delay:{i%5*.025:F3}s;--duration:{2.4+i%7*.13:F2}s;--turn:{(i%2==0?1:-1)*(240+i*37)}deg;--color:{new[]{"#e6b857","#73b59b","#74baca","#c6a1d9"}[i%4]}");
+    }
+    protected override void OnParametersSet()
+    {
+        var complete=RouteCompletion.IsComplete(Route);
+        if(ObservedRoute!=Route.Id || !complete) ShowCelebration=false;
+        if(complete && ((ObservedRoute==Route.Id && !SummitReached) || (CelebrateCompletion && !ShowCelebration))) Celebrate();
+        ObservedRoute=Route.Id;
+        SummitReached=complete;
+        Geometry=RouteMapLayout.Build(Route);
+        BuildLandscape();
+        Roots=Geometry.Checkpoints.Where(p=>Route.Milestones.Single(m=>m.Id==p.Id).DependsOn.Count==0).ToList();
+        VisibleCheckpoints=RouteMapLayout.VisibleCheckpoints(Route,Geometry);
+        var firstVisible=Geometry.Checkpoints.Where(p=>VisibleCheckpoints.Contains(p.Id)).Select(p=>p.Y).DefaultIfEmpty(Geometry.Height-100).Min();
+        FogHeight=SummitReached?0:Math.Max(0,firstVisible-110);
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if(CelebrateCompletion && ShowCelebration) await OnCelebrationShown.InvokeAsync();
+        if(PositionedRoute==Route.Id) return;
+        PositionedRoute=Route.Id;
+        try { await JS.InvokeVoidAsync("ascentRouteMap.startAtBase",Viewport); }
+        catch(JSException) { }
+    }
+    string RootPath(MapCheckpoint point)=>FormattableString.Invariant($"M350 {Geometry.Height-35} C350 {Geometry.Height-65},{point.X*7} {point.Y+65},{point.X*7} {point.Y}");
+    static string RootBranch(MapCheckpoint point)=>FormattableString.Invariant($"M{RouteMapLayout.TrailCenter(point.Row)*7} {point.Y+55} C{RouteMapLayout.TrailCenter(point.Row)*7} {point.Y+18},{point.X*7} {point.Y+35},{point.X*7} {point.Y}");
+    string RootSpine()
+    {
+        var path=FormattableString.Invariant($"M350 {Geometry.Height-35}");
+        var lastX=350;var lastY=Geometry.Height-35;
+        foreach(var root in Roots.OrderBy(p=>p.Row))
+        {
+            var x=RouteMapLayout.TrailCenter(root.Row)*7;var y=root.Y+55;
+            path+=FormattableString.Invariant($" C{lastX} {(lastY+y)/2},{x} {(lastY+y)/2},{x} {y}");
+            lastX=x;lastY=y;
+        }
+        return path;
+    }
+    static string Edge(MapCheckpoint from,MapCheckpoint to)=>FormattableString.Invariant($"M{from.X*7} {from.Y} C{from.X*7} {(from.Y+to.Y)/2},{to.X*7} {(from.Y+to.Y)/2},{to.X*7} {to.Y}");
+    void BuildLandscape()
+    {
+        Ridges=[];Trees=[];Clouds=[new(-45,330),new(560,520)];
+        string[] colors=["#8eb2b0","#719b9f","#9bbab7","#7fa8aa","#aac5bf"];
+        var index=0;
+        for(var y=680;y<Geometry.Height;y+=250)
+        {
+            var a=65+(int)(40*Math.Sin(index*1.3));
+            var b=210+(int)(55*Math.Cos(index*.8));
+            var c=400+(int)(60*Math.Sin(index*.7));
+            var d=580+(int)(35*Math.Cos(index*1.7));
+            // Each ridge is drawn at its real size and position, with a unique silhouette.
+            // Extend every shape beyond the canvas bottom. Only its natural ridgeline can
+            // be visible: no rectangular panel edge or image boundary can form a seam.
+            Ridges.Add(new(FormattableString.Invariant($"M-50 {y+140} L{a} {y-35} L{a+65} {y+24} L{b} {y-65} L{b+80} {y+18} L{c} {y-20} L{d} {y+95} L750 {y-45} V{Geometry.Height+60} H-50Z"),colors[index%colors.Length]));
+            if(index%2==0)
+            {
+                var x=index%4==0?55:635;
+                Trees.Add(new(x,y+35));Trees.Add(new(x+22,y+55));Trees.Add(new(x-17,y+65));
+            }
+            if(index%2==1)Clouds.Add(new(index%4==1?-75:590,y+115));
+            index++;
+        }
+    }
+    record LandscapeRidge(string Path,string Color);
+    record LandscapePoint(int X,int Y);
+}
+

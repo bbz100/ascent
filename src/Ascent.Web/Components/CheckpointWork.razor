@@ -1,0 +1,26 @@
+<ol class="checkpoint-actions" aria-label="Steps in this checkpoint">
+    @foreach(var work in Items)
+    {
+        <li><strong>@work.Title</strong><p>@work.Description</p>
+        @if(work.Placeholder || work.DueDate is not null)
+        {<small>@(work.Placeholder?"Details to confirm · ":"")@(work.DueDate?.ToString("dd MMM yyyy")??"No confirmed date")</small>}
+        @if(work.DeadlineId is not null && DateReviews.Any(d=>d.DeadlineId==work.DeadlineId && d.UseForPlan && d.Date==work.DueDate))
+        {<small>Date confirmed by you</small>}
+        <DocumentSource Sources="@Sources(work)" Document="@Document" FileName="@FileName" />
+        </li>
+    }
+</ol>
+@code {
+    [Parameter,EditorRequired] public List<WorkItem> Items {get;set;}=[];
+    [Parameter,EditorRequired] public List<Requirement> Requirements {get;set;}=[];
+    [Parameter] public List<AssessmentDeadline> Deadlines {get;set;}=[];
+    [Parameter] public List<DeadlineReview> DateReviews {get;set;}=[];
+    [Parameter,EditorRequired] public string Document {get;set;}="";
+    [Parameter] public string FileName {get;set;}="";
+    List<Evidence> Sources(WorkItem work)
+    {
+        var sources = Requirements.Where(r => r.Id == work.RequirementId).Select(r => r.Source).ToList();
+        sources.AddRange(Deadlines.Where(d => d.Id == work.DeadlineId).Select(d => d.Source));
+        return sources;
+    }
+}

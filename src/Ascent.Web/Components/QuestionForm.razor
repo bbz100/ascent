@@ -1,0 +1,98 @@
+<fieldset class="question-fields" disabled="@Busy">
+    <legend class="sr-only">Your answer</legend>
+    @if (!string.IsNullOrWhiteSpace(Question.AnswerHint))
+    { <p class="field-help">@Question.AnswerHint</p> }
+    @switch (Question.InputType)
+    {
+        case "choice":
+        case "multi_choice":
+            <div class="choice-group" role="@(Question.InputType=="choice"?"radiogroup":"group")" aria-label="Your answer">
+                @foreach (var option in Question.Options)
+                {
+                    var selected = Response.SelectedOptions.Contains(option.Id);
+                    <label class="choice @(selected?"chosen":"")"><input type="@(Question.InputType=="choice"?"radio":"checkbox")" name="@Question.Id" checked="@selected" @onchange="e=>Choose(option.Id,e.Value)" /><span><strong>@option.Label</strong><small>@option.Hint</small></span></label>
+                }
+            </div>
+            break;
+        case "date":
+            <label class="date-answer">Your answer<input type="date" aria-label="Your answer" @bind="Response.Date" /></label>
+            break;
+        case "fields":
+            @if (Question.RepeatCount>1 && Question.Fields.Count==2)
+            {
+                <div class="workshop-head" aria-hidden="true"><span></span>@foreach(var field in Question.Fields){<span>@field.Label @if(!field.Required){<small>(optional)</small>}</span>}</div>
+                @for(var row=0;row<Question.RepeatCount;row++)
+                {
+                    var rowIndex=row;
+                    <div class="workshop-row" @key="rowIndex"><span class="row-number">@((row+1).ToString("00"))</span>
+                        @foreach(var field in Question.Fields)
+                        {
+                            var value=Response.Values.Single(v=>v.FieldId==field.Id&&v.Row==rowIndex);
+                            <label><span class="sr-only">@field.Label @(row+1)</span>
+                                @if(field.Type=="date"){<input type="date" aria-label="@($"{field.Label} {row+1}")" @bind="value.Date" />}
+                                else{<input type="text" aria-label="@($"{field.Label} {row+1}")" @bind="value.Text" @bind:event="oninput" maxlength="1000" />}
+                            </label>
+                        }
+                    </div>
+                }
+            }
+            else
+            {
+            @for (var row=0;row<Question.RepeatCount;row++)
+            {
+                var rowIndex=row;
+                @if (Question.RepeatCount>1) { <span class="row-number">@((row+1).ToString("00"))</span> }
+                @foreach (var field in Question.Fields)
+                {
+                    var value=Response.Values.Single(v=>v.FieldId==field.Id&&v.Row==rowIndex);
+                    <label class="single-field">@field.Label @if(!field.Required){<small>(optional)</small>}
+                        @if(field.Type=="date") { <input type="date" aria-label="@field.Label" @bind="value.Date" /> }
+                        else { <input type="text" aria-label="@field.Label" @bind="value.Text" @bind:event="oninput" maxlength="1000" /> }
+                    </label>
+                }
+            }
+            }
+            break;
+        default:
+            <label class="single-field">Your answer<input type="text" aria-label="Your short answer" @bind="ShortAnswer" @bind:event="oninput" maxlength="1000" /></label>
+            break;
+    }
+    <div class="button-row"><button type="button" class="primary" disabled="@(!CanSave)" @onclick="Submit">Save and continue →</button><button type="button" class="secondary" @onclick="()=>OnSubmit.InvokeAsync(new QuestionSubmission(string.Empty,true,null))">I don’t know yet</button></div>
+    <small class="answer-help">Unknown details can be added later. No need to guess.</small>
+</fieldset>
+
+@code {
+    [Parameter,EditorRequired] public Clarification Question {get;set;}=null!;
+    [Parameter] public bool Busy {get;set;}
+    [Parameter] public EventCallback<QuestionSubmission> OnSubmit {get;set;}
+    QuestionResponse Response=new();
+    string? LoadedId;
+    string ShortAnswer="";
+    protected override void OnParametersSet()
+    {
+        if(LoadedId==Question.Id)return;
+        LoadedId=Question.Id;Response=new();ShortAnswer="";
+        for(var row=0;row<Question.RepeatCount;row++)
+            foreach(var field in Question.Fields)Response.Values.Add(new(){FieldId=field.Id,Row=row});
+    }
+    bool CanSave=>Question.InputType switch
+    {
+        "choice" or "multi_choice"=>Response.SelectedOptions.Count>0,
+        "date"=>Response.Date is not null,
+        "fields"=>Response.Values.Any(v=>v.Date is not null||!string.IsNullOrWhiteSpace(v.Text)) &&
+            Response.Values.All(v=>!Question.Fields.Single(f=>f.Id==v.FieldId).Required ||
+                (Question.Fields.Single(f=>f.Id==v.FieldId).Type=="date"?v.Date is not null:!string.IsNullOrWhiteSpace(v.Text))),
+        _=>!string.IsNullOrWhiteSpace(ShortAnswer)
+    };
+    void Choose(string id,object? value)
+    {
+        if(Question.InputType=="choice"){Response.SelectedOptions=[id];Response.Choice=id;return;}
+        if(value is true){if(!Response.SelectedOptions.Contains(id))Response.SelectedOptions.Add(id);}
+        else Response.SelectedOptions.Remove(id);
+    }
+    Task Submit()
+    {
+        if(Question.InputType=="text")Response.Items=[ShortAnswer];
+        return OnSubmit.InvokeAsync(new QuestionSubmission("",false,Response));
+    }
+}
